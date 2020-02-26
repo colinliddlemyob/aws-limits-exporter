@@ -8,12 +8,14 @@ import (
 
 // SupportClientImpl ...
 type SupportClientImpl struct {
-	SupportClient supportiface.SupportAPI
+	SupportClient    supportiface.SupportAPI
+	checkResultCache map[string]*support.TrustedAdvisorCheckResult
 }
 
 // SupportClient ...
 type SupportClient interface {
 	RequestServiceLimitsRefreshLoop()
+	RequestResultCacheRefreshLoop()
 	DescribeServiceLimitsCheckResult(checkID string) (*support.TrustedAdvisorCheckResult, error)
 }
 

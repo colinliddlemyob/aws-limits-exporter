@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -137,9 +138,60 @@ func NewSupportClient() *SupportClientImpl {
 
 	sess := session.New(awsConfig)
 
-	return &SupportClientImpl{
-		SupportClient: support.New(sess),
+	clientImpl := &SupportClientImpl{
+		SupportClient:    support.New(sess),
+		checkResultCache: make(map[string]*support.TrustedAdvisorCheckResult),
 	}
+	for _, checkID := range checkIDs {
+		clientImpl.populateResultCache(checkID)
+	}
+	glog.Info("Finished initialising check cache")
+
+	return clientImpl
+}
+
+func (client *SupportClientImpl) populateResultCache(checkID string) error {
+	describeInput := &support.DescribeTrustedAdvisorCheckResultInput{
+		CheckId: aws.String(checkID),
+	}
+	glog.Infof("Refreshing Trusted Advisor check result cache '%s'...", checkID)
+
+	output, err := client.SupportClient.DescribeTrustedAdvisorCheckResult(describeInput)
+	if err == nil {
+		client.checkResultCache[checkID] = output.Result
+	}
+	return err
+}
+
+func (client *SupportClientImpl) refreshTrustedAdvisorCheck(checkID string) error {
+	input := &support.RefreshTrustedAdvisorCheckInput{
+		CheckId: aws.String(checkID),
+	}
+	glog.Infof("Refreshing Trusted Advisor check '%s'...", checkID)
+	_, err := client.SupportClient.RefreshTrustedAdvisorCheck(input)
+
+	return err
+}
+
+// RequestResultCacheRefreshLoop ...
+func (client *SupportClientImpl) RequestResultCacheRefreshLoop() {
+	var (
+		waitMs int64 = 60000
+	)
+
+	for {
+		// Sleep first as we force initialise on creation, so we don't need to refresh immediately
+		time.Sleep(time.Duration(waitMs) * time.Millisecond)
+		for _, checkID := range checkIDs {
+			err := client.populateResultCache(checkID)
+			if err != nil {
+				glog.Errorf("Error when requesting check result: %v", err)
+				continue
+			}
+		}
+		glog.Infof("Waiting %d minutes until the next refresh...", waitMs/60000)
+	}
+
 }
 
 // RequestServiceLimitsRefreshLoop ...
@@ -150,11 +202,7 @@ func (client *SupportClientImpl) RequestServiceLimitsRefreshLoop() {
 
 	for {
 		for _, checkID := range checkIDs {
-			input := &support.RefreshTrustedAdvisorCheckInput{
-				CheckId: aws.String(checkID),
-			}
-			glog.Infof("Refreshing Trusted Advisor check '%s'...", checkID)
-			_, err := client.SupportClient.RefreshTrustedAdvisorCheck(input)
+			err := client.refreshTrustedAdvisorCheck(checkID)
 			if err != nil {
 				glog.Errorf("Error when requesting status refresh: %v", err)
 				continue
@@ -168,16 +216,11 @@ func (client *SupportClientImpl) RequestServiceLimitsRefreshLoop() {
 
 // DescribeServiceLimitsCheckResult ...
 func (client *SupportClientImpl) DescribeServiceLimitsCheckResult(checkID string) (*support.TrustedAdvisorCheckResult, error) {
-	input := &support.DescribeTrustedAdvisorCheckResultInput{
-		CheckId: aws.String(checkID),
+	result, ok := client.checkResultCache[checkID]
+	if !ok {
+		return nil, fmt.Errorf("Failed to find %s in cache", checkID)
 	}
-
-	output, err := client.SupportClient.DescribeTrustedAdvisorCheckResult(input)
-	if err != nil {
-		return nil, err
-	}
-
-	return output.Result, nil
+	return result, nil
 }
 
 // NewSupportExporter ...
@@ -194,6 +237,11 @@ func NewSupportExporter() *SupportExporter {
 // RequestServiceLimitsRefreshLoop ...
 func (e *SupportExporter) RequestServiceLimitsRefreshLoop() {
 	e.supportClient.RequestServiceLimitsRefreshLoop()
+}
+
+// RequestResultCacheRefreshLoop ...
+func (e *SupportExporter) RequestResultCacheRefreshLoop() {
+	e.supportClient.RequestResultCacheRefreshLoop()
 }
 
 // Describe ...

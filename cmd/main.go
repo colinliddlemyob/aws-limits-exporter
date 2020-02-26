@@ -26,6 +26,7 @@ func main() {
 
 	exporter := core.NewSupportExporter()
 	go exporter.RequestServiceLimitsRefreshLoop()
+	go exporter.RequestResultCacheRefreshLoop()
 
 	prometheus.Register(exporter)
 
