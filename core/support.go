@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -141,6 +142,7 @@ func NewSupportClient() *SupportClientImpl {
 	clientImpl := &SupportClientImpl{
 		SupportClient:    support.New(sess),
 		checkResultCache: make(map[string]*support.TrustedAdvisorCheckResult),
+		resultCacheLock:  sync.RWMutex{},
 	}
 	for _, checkID := range checkIDs {
 		clientImpl.populateResultCache(checkID)
@@ -158,6 +160,8 @@ func (client *SupportClientImpl) populateResultCache(checkID string) error {
 
 	output, err := client.SupportClient.DescribeTrustedAdvisorCheckResult(describeInput)
 	if err == nil {
+		client.resultCacheLock.Lock()
+		defer client.resultCacheLock.Unlock()
 		client.checkResultCache[checkID] = output.Result
 	}
 	return err
@@ -216,6 +220,8 @@ func (client *SupportClientImpl) RequestServiceLimitsRefreshLoop() {
 
 // DescribeServiceLimitsCheckResult ...
 func (client *SupportClientImpl) DescribeServiceLimitsCheckResult(checkID string) (*support.TrustedAdvisorCheckResult, error) {
+	client.resultCacheLock.RLock()
+	defer client.resultCacheLock.RUnlock()
 	result, ok := client.checkResultCache[checkID]
 	if !ok {
 		return nil, fmt.Errorf("Failed to find %s in cache", checkID)
